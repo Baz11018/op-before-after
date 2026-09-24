@@ -16,7 +16,7 @@ case 'edit':html=nav(draft.fresh?'Add Section':'Edit Section',r.title,'cancelEdi
 case 'preview':html=nav('Report Preview',r.title,"view.screen='report';render()")+`<div class="wrap"><div class="preview"><div class="title">${esc(r.title)}</div><div class="small">${fmt(r.date)}</div>${r.sections.map((s,i)=>`<div style="border-top:1px solid #e5e8ef;margin-top:14px;padding-top:12px"><b>${String(i+1).padStart(2,'0')} · ${esc(s.title)}</b><div class="pair"><div><span class="pill">BEFORE</span><div class="thumbs" data-ids="${s.before.join(',')}"></div></div><div><span class="pill">AFTER</span><div class="thumbs" data-ids="${s.after.join(',')}"></div></div></div></div>`).join('')}</div><button class="btn primary block" onclick="generatePdf()">Generate PDF</button></div>`;break;
 case 'pdf':html=nav('PDF Ready',pdfFile?.name||'',"view.screen='preview';render()")+`<div class="wrap"><div class="card"><div class="title">${esc(pdfFile?.name||'')}</div><div class="small">${pdfFile?mb(pdfFile.blob.size):''}</div><div id="pdfPreview" class="pdfWrap"><div class="small">Rendering preview…</div></div></div><button class="btn primary block" onclick="sharePdf()">Share PDF</button><button class="btn secondary block" style="margin-top:9px" onclick="downloadPdf()">Save PDF</button></div>`;break;
 case 'template':html=`<div class="top"><div class="grad"><h1>Template</h1><p>Reliable report header and footer</p></div></div><div class="wrap"><div class="card"><div class="title">${state.templateName?esc(state.templateName):'Select Reliable PDF template'}</div><div class="small">Add the two-page PDF template once on this device.</div><input type="file" accept="application/pdf" onchange="saveTemplate(this.files[0])">${state.templateName?'<button class="btn danger block" style="margin-top:9px" onclick="removeTemplate()">Remove template</button>':''}</div></div>${tabs()}`;break;
-case 'settings':html=`<div class="top"><div class="grad"><h1>Settings</h1><p>OP Before & After v1.1</p></div></div><div class="wrap"><div class="card"><div class="title">Backup & Restore</div><div class="small">Photos and reports remain on this device. Keep a backup in Files or iCloud Drive.</div><button class="btn primary block" style="margin-top:12px" onclick="backupAll()">Backup all reports</button><label>Restore backup</label><input type="file" accept=".zip,application/zip" onchange="restoreFile(this.files[0]);this.value=''"> </div></div>${tabs()}`;break;}
+case 'settings':html=`<div class="top"><div class="grad"><h1>Settings</h1><p>OP Before & After v1.2</p></div></div><div class="wrap"><div class="card"><div class="title">Backup & Restore</div><div class="small">Photos and reports remain on this device. Keep a backup in Files or iCloud Drive.</div><button class="btn primary block" style="margin-top:12px" onclick="backupAll()">Backup all reports</button><label>Restore backup</label><input type="file" accept=".zip,application/zip" onchange="restoreFile(this.files[0]);this.value=''"> </div></div>${tabs()}`;break;}
 $('#app').innerHTML=html;hydrate()}
 async function hydrate(){for(let el of document.querySelectorAll('[data-ids]')){for(let id of el.dataset.ids.split(',').filter(Boolean)){let u=await photoUrl(id);if(!u)continue;urls.push(u);let im=document.createElement('img');im.src=u;im.onclick=()=>openPhoto(id);el.appendChild(im)}}if(view.screen==='edit'){await fillGrid('before');await fillGrid('after')}if(view.screen==='pdf')renderPdfPreview()}
 async function fillGrid(which){let el=$('#'+which+'Grid');if(!el)return;for(let i=0;i<draft[which].length;i++){let id=draft[which][i],u=await photoUrl(id);if(!u)continue;urls.push(u);let box=document.createElement('div');box.className='photo';box.innerHTML=`<img src="${u}"><div class="photoBtns"><button onclick="movePhoto('${which}',${i},-1)">←</button><button onclick="removePhoto('${which}',${i})">×</button><button onclick="movePhoto('${which}',${i},1)">→</button></div>`;box.querySelector('img').onclick=()=>openPhoto(id);el.appendChild(box)}}
@@ -45,14 +45,15 @@ async function generatePdf(){
   await nextPage();
   for(let [index,s] of r.sections.entries()){
    let before=await photosOf(s.before),after=await photosOf(s.after),paired=before.length===1&&after.length===1;
-   let groups=paired?[]:[{label:'BEFORE',rows:makeRows(before)},{label:'AFTER',rows:makeRows(after)}].filter(g=>g.rows.length);
+   let groups=paired?[]:[{label:'BEFORE',rows:makeRows(before),count:before.length},{label:'AFTER',rows:makeRows(after),count:after.length}].filter(g=>g.rows.length);
    let pairParts=paired?[dimensions(before[0],(W-26)/2,175),dimensions(after[0],(W-26)/2,175)]:null;
    let pairHeight=paired?Math.max(...pairParts.map(p=>p.h)):0;
    let lines=textLines(`${String(index+1).padStart(2,'0')}  ${s.title}`),headingHeight=19*lines.length+13;
    let contentHeight=paired?27+pairHeight+12:groups.reduce((sum,g)=>sum+27+g.rows.reduce((h,row)=>h+row.h+12,0),0);
    let totalHeight=headingHeight+contentHeight+12,firstHeight=paired?27+pairHeight+12:groups.length?27+groups[0].rows[0].h+12:0;
    // Keep the entire section together when possible. For long sections, keep the title with the first photo row.
-   let reserve=totalHeight<=TOP-BOTTOM?totalHeight:headingHeight+firstHeight;
+   let firstGroupHeight=groups.length?27+groups[0].rows.reduce((h,row)=>h+row.h+12,0):0;
+   let reserve=totalHeight<=TOP-BOTTOM?totalHeight:headingHeight+(groups[0]?.count===3&&headingHeight+firstGroupHeight<=TOP-BOTTOM?firstGroupHeight:firstHeight);
    if(y-reserve<BOTTOM)await nextPage();
    page.drawRectangle({x:L,y:y-19*lines.length-6,width:W,height:19*lines.length+6,color:rgb(.94,.95,.97)});
    for(let line of lines){page.drawText(line,{x:L+9,y:y-15,size:11,font:bold});y-=19}y-=13;
@@ -60,12 +61,19 @@ async function generatePdf(){
     let cell=(W-26)/2;
     for(let j=0;j<2;j++){let x=L+8+j*(cell+10),p=pairParts[j];page.drawRectangle({x,y:y-17,width:cell,height:20,color:j?rgb(.87,.96,.9):rgb(.89,.94,1)});page.drawText(j?'AFTER':'BEFORE',{x:x+10,y:y-11,size:9,font:bold});page.drawImage(p.im,{x:x+(cell-p.w)/2,y:y-27-pairHeight+(pairHeight-p.h)/2,width:p.w,height:p.h})}
     y-=27+pairHeight+12;
-   }else for(let group of groups){
+   }else for(let [groupIndex,group] of groups.entries()){
+    let photosHeight=group.rows.reduce((h,row)=>h+row.h+12,0),groupHeight=27+photosHeight;
+    // A three-photo group that fits on one page stays intact.
+    if(group.count===3&&groupHeight<=TOP-BOTTOM&&y-groupHeight<BOTTOM)await nextPage();
+    let nextGroup=groups[groupIndex+1];
+    let nextHeight=nextGroup?27+nextGroup.rows.reduce((h,row)=>h+row.h+12,0):index<r.sections.length-1?225:0;
+    let endsPage=!nextGroup&&index===r.sections.length-1||y-groupHeight-nextHeight<BOTTOM;
+    let centerThree=group.count===3&&endsPage&&y-groupHeight>=BOTTOM;
     let labelNeeded=true;
     for(let row of group.rows){
      let rowSpace=row.h+12+(labelNeeded?27:0);
      if(y-rowSpace<BOTTOM){await nextPage();labelNeeded=true}
-     if(labelNeeded){drawLabel(group.label);labelNeeded=false}
+     if(labelNeeded){drawLabel(group.label);labelNeeded=false;if(centerThree){let free=y-BOTTOM-photosHeight;y-=Math.max(0,free/2);centerThree=false}}
      drawRow(row)
     }
    }
